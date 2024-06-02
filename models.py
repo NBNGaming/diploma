@@ -1,37 +1,41 @@
-import os
+import cv2
+import numpy as np
 import timm
 import torch
 from PIL import Image
-from sklearn.cluster import KMeans
 from torch.utils.data import Dataset
-import numpy as np
+
+from config import *
 
 
-def color_clustering(img):
+def preprocess_image(img):
     img = img.copy()
     img.thumbnail((640, 640))
-    img = np.asarray(img)
-
-    img = img.reshape(img.shape[0] * img.shape[1], 3)
-    model = KMeans(n_clusters=5)
-    model.fit(img)
-
-    counts = np.bincount(model.labels_)
-    sorted_indices = np.argsort(counts)[::-1]
-    sorted_centroids = model.cluster_centers_[sorted_indices]
-
-    return sorted_centroids
+    return np.asarray(img)
 
 
-# work in progress
-def color_hist_3d(img):
-    # Чтобы было везде одинаковое число пикселей
-    img = img.resize((640, 640))
-    img = np.asarray(img)
-    pixels = img.reshape(-1, 3)
-    hist, _ = np.histogramdd(pixels, bins=(10, 10, 10))
+def color_hist_3d(img_arr):
+    pixels = img_arr.reshape(-1, 3)
+    hist, _ = np.histogramdd(pixels, bins=10, range=((0, 256), (0, 256), (0, 256)))
     hist /= pixels.shape[0]  # нормализуем
     return hist.flatten()
+
+
+def get_sift_desc(img_arr):
+    img = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
+    sift = cv2.SIFT_create()
+    _, des = sift.detectAndCompute(img, None)
+    return des
+
+
+def get_visual_words(model, img_arr):
+    des = get_sift_desc(img_arr)
+    if des is not None:
+        classes = model.predict(des)
+        hist, _ = np.histogram(classes, SIFT_CLUSTERS, density=True)
+    else:
+        hist = np.zeros(SIFT_CLUSTERS, dtype='float64')
+    return hist
 
 
 def get_device() -> str:
@@ -43,25 +47,19 @@ def get_device() -> str:
 
 
 class ImageDataset(Dataset):
-    def __init__(self, root, transform1, transform2):
-        self.root = root
+    def __init__(self, img_files, transform1, transform2):
+        self.img_files = img_files
         self.transform1 = transform1
         self.transform2 = transform2
-        self.image_files = os.listdir(root)[:10000]
 
     def __len__(self):
-        return len(self.image_files)
+        return len(self.img_files)
 
     def __getitem__(self, idx):
-        path = os.path.join(self.root, self.image_files[idx])
-        image = Image.open(path).convert('RGB')
+        image = Image.open(self.img_files[idx]).convert('RGB')
         tensor1 = self.transform1(image)
         tensor2 = self.transform2(image)
-
-        # colors = color_clustering(image)
-        # colors /= 255  # нормализуем
-
-        return tensor1, tensor2, path
+        return tensor1, tensor2
 
 
 class MyModel:
